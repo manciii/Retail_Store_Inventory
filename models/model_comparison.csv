@@ -1,0 +1,5 @@
+,MAE,RMSE,MAPE_%,WAPE_%
+Naive (lag_1),119.589,152.944,361.918,87.606
+Moving Average (7d),93.319,115.519,347.682,68.361
+SARIMA (classical),88.743,108.756,337.82,65.044
+XGBoost (gradient boosted trees),69.077,88.192,246.679,50.603
