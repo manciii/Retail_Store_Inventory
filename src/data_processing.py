@@ -1,10 +1,4 @@
-"""
-data_processing.py
-Data validation, quality checks, and cleaning for the retail inventory dataset.
 
-Design principle: every cleaning decision is a function with a docstring
-explaining WHY, not just what. Nothing is dropped silently.
-"""
 
 import numpy as np
 import pandas as pd
@@ -18,11 +12,7 @@ def load_raw(path: str = RAW_DATA_PATH) -> pd.DataFrame:
 
 
 def validate_raw(df: pd.DataFrame) -> dict:
-    """
-    Run data-quality checks and return a report dict.
-    We report issues rather than fixing them here, so validation and
-    cleaning stay separate and auditable steps.
-    """
+    
     report = {}
     report["n_rows"] = len(df)
     report["n_duplicates"] = int(df.duplicated().sum())
@@ -41,32 +31,18 @@ def validate_raw(df: pd.DataFrame) -> dict:
     # Units sold should never exceed opening inventory for that day+order.
     report["sold_exceeds_inventory"] = int((df["Units Sold"] > df["Inventory Level"]).sum())
 
+    cat_per_product = df.groupby("Product ID")["Category"].nunique()
+    region_per_store = df.groupby("Store ID")["Region"].nunique()
+    report["products_with_multiple_categories"] = int((cat_per_product > 1).sum())
+    report["stores_with_multiple_regions"] = int((region_per_store > 1).sum())
+    report["category_is_stable_per_product"] = bool((cat_per_product == 1).all())
+    report["region_is_stable_per_store"] = bool((region_per_store == 1).all())
+
     return report
 
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Apply cleaning decisions. Each step documents its reasoning:
-
-    1. Rename columns to snake_case for consistent downstream use.
-    2. Parse Date to datetime, sort by (store, product, date) -- required
-       for any lag/rolling feature to be correct.
-    3. Drop exact duplicate rows (none found in this dataset, but kept as
-       a safeguard for future data refreshes).
-    4. `legacy_demand_forecast` contains ~0.9% negative values (a noisy
-       vendor-supplied forecast column, NOT our target). We do not use it
-       as a model feature (using someone else's forecast as an input to
-       our forecast would be circular / a leakage risk if it was ever
-       computed using future info) -- we keep it only as a benchmark to
-       compare our model against in evaluation.
-    5. We do NOT clip or remove outliers in Units Sold / Inventory Level.
-       Retail demand is naturally spiky (promotions, holidays) -- removing
-       those points would strip out exactly the signal we want the model
-       to learn. Outliers are instead handled implicitly by using
-       tree-based models (robust to outliers) and by inspecting them in EDA.
-    6. Categorical columns are cast to `category` dtype for memory
-       efficiency and explicit, unambiguous category sets.
-    """
+  
     df = raw_to_clean_columns(df)
 
     df["date"] = pd.to_datetime(df["date"])

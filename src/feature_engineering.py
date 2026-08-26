@@ -85,16 +85,21 @@ def add_business_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_target_encodings_leak_safe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Category/region average demand can help the model, but computing it on
-    the full dataset (including future rows) would leak future information
-    into early rows. We instead use an EXPANDING mean computed only over
-    each combo's own past (shift(1) + expanding), which is leakage-safe.
-    """
-    df["cat_expanding_mean"] = (
-        df.groupby("category", observed=True)[TARGET_COL]
+    daily = (
+        df.groupby(["category", "date"], observed=True)[TARGET_COL]
+        .mean()
+        .reset_index()
+        .sort_values(["category", "date"])
+    )
+    daily["cat_expanding_mean"] = (
+        daily.groupby("category", observed=True)[TARGET_COL]
         .apply(lambda s: s.shift(1).expanding(min_periods=1).mean())
         .reset_index(level=0, drop=True)
+    )
+    df = df.merge(
+        daily[["category", "date", "cat_expanding_mean"]],
+        on=["category", "date"],
+        how="left",
     )
     return df
 

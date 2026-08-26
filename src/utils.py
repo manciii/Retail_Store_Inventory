@@ -1,18 +1,9 @@
-"""
-utils.py
-Shared configuration and helper utilities for the demand forecasting project.
-Keeping config here (instead of hardcoding paths/constants in every script)
-means every module and notebook stays in sync if a path or assumption changes.
-"""
+
 
 import os
 import random
 import numpy as np
 import pandas as pd
-
-# ---------------------------------------------------------------------------
-# Reproducibility
-# ---------------------------------------------------------------------------
 RANDOM_SEED = 42
 
 
@@ -23,19 +14,11 @@ def set_seed(seed: int = RANDOM_SEED) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-# ---------------------------------------------------------------------------
-# Paths (relative to project root -- no hardcoded absolute paths)
-# ---------------------------------------------------------------------------
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW_DATA_PATH = os.path.join(PROJECT_ROOT, "data", "raw", "retail_store_inventory.csv")
 PROCESSED_DATA_PATH = os.path.join(PROJECT_ROOT, "data", "processed", "clean_sales.csv")
 FEATURES_DATA_PATH = os.path.join(PROJECT_ROOT, "data", "processed", "features.csv")
-MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-SQL_DB_PATH = os.path.join(PROJECT_ROOT, "data", "processed", "retail.db")
 
-# ---------------------------------------------------------------------------
-# Column name constants
-# ---------------------------------------------------------------------------
 DATE_COL = "date"
 STORE_COL = "store_id"
 PRODUCT_COL = "product_id"

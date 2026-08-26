@@ -1,0 +1,8 @@
+{
+  "XGBoost (gradient boosted trees)": {
+    "MAE": 69.018,
+    "RMSE": 88.161,
+    "MAPE_%": 246.468,
+    "WAPE_%": 50.56
+  }
+}

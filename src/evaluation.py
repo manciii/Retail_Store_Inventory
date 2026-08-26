@@ -1,22 +1,4 @@
-"""
-evaluation.py
-Forecasting evaluation metrics and model comparison table.
 
-Why these metrics:
-  - MAE  : average absolute error in units -- directly interpretable by
-           business stakeholders ("we're off by ~14 units/day on average").
-  - RMSE : penalizes large errors more heavily -- important because a big
-           miss on a high-volume product is more costly than MAE alone
-           suggests (stockouts/overstock scale with the size of the miss).
-  - MAPE : scale-free percentage error -- lets us compare error across
-           products with very different volumes. Undefined at
-           units_sold=0, so we exclude those rows for MAPE (WAPE fixes
-           this, see below).
-  - WAPE : sum(|error|) / sum(actual) -- a volume-weighted percentage
-           error that doesn't blow up on low-volume/zero rows the way
-           MAPE can. This is the metric most retail forecasting teams
-           actually track in production for exactly that reason.
-"""
 
 import numpy as np
 import pandas as pd

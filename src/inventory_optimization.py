@@ -1,35 +1,4 @@
-"""
-inventory_optimization.py
-Converts demand forecasts into actionable inventory recommendations.
 
-Formulas used (standard inventory-theory formulas, not invented):
-
-  Safety Stock   = Z * sigma_demand * sqrt(lead_time_days)
-      Z            : z-score for target service level (e.g. 1.65 for ~95%)
-      sigma_demand : standard deviation of daily forecast error (or demand,
-                     if error history isn't available) -- captures how
-                     uncertain/volatile demand is. More volatile demand
-                     needs a bigger buffer to hit the same service level.
-      sqrt(lead_time_days): uncertainty compounds over the lead-time window
-                     (assuming daily demand errors are ~independent), which
-                     is why the classic square-root-of-time scaling applies.
-
-  Reorder Point  = (avg_daily_forecast_demand * lead_time_days) + Safety Stock
-      i.e. the inventory level at which a new order must be placed so that,
-      by the time it arrives (lead_time_days later), you don't run out.
-
-  Recommended Order Qty = max(0, Reorder Point - Current Inventory)
-      Simple order-up-to-reorder-point logic (only order what's needed to
-      get back above the reorder point; never order a negative amount).
-
-Assumptions (from BUSINESS_ASSUMPTIONS in utils.py, stated explicitly so
-they can be defended/changed):
-  - lead_time_days = 7   (time between placing a purchase order and
-                           receiving stock -- typical for a retail supplier)
-  - service_level_z = 1.65 (~95% service level: appropriate for a
-                           mid-priority retail category; would be raised
-                           for critical/high-margin SKUs)
-"""
 
 import numpy as np
 import pandas as pd
@@ -78,13 +47,13 @@ def build_recommendations(
     # Business risk flags
     def classify(row):
         if row["current_inventory"] <= row["safety_stock"]:
-            return "🔴 Stockout Risk"
+            return " Stockout Risk"
         elif row["current_inventory"] <= row["reorder_point"]:
-            return "🟡 Low Inventory"
+            return " Low Inventory"
         elif row["current_inventory"] <= row["reorder_point"] * 2.5:
-            return "🟢 Healthy Inventory"
+            return " Healthy Inventory"
         else:
-            return "🔵 Overstock"
+            return " Overstock"
 
     df["risk_flag"] = df.apply(classify, axis=1)
 

@@ -16,9 +16,10 @@ A retailer with 5 stores x 20 products needs to answer, every day, per SKU:
 2. Which products are at risk of stockout or sitting overstocked?
 3. When should we reorder, and how much?
 
-This project builds that decision-support system end to end: SQL analysis
--> EDA -> leakage-safe feature engineering -> ML forecasting -> evaluation
--> explainability -> inventory optimization -> a dashboard and API.
+This project builds that decision-support system end to end: data
+validation -> EDA -> leakage-safe feature engineering -> ML forecasting
+-> evaluation -> explainability -> inventory optimization -> a dashboard
+and API.
 
 ---
 
@@ -34,20 +35,30 @@ This project builds that decision-support system end to end: SQL analysis
   Condition, Holiday/Promotion, Competitor Pricing, Seasonality`
 - `Demand Forecast` is a legacy vendor forecast column (673 negative values
   found on inspection) -- excluded from modeling, kept only as a reference
+- **`Category` and `Region` are not stable per-product/store attributes** --
+  every one of the 20 products spans multiple category labels over time,
+  and every one of the 5 stores spans multiple region labels over time.
+  This is a real, checked-for characteristic of the data (`validate_raw()`
+  in `src/data_processing.py` flags it explicitly), and it matters: any
+  feature or query that groups by category/region needs to treat that
+  grouping as a *daily* label, not a fixed product identity -- an earlier
+  version of the category target-encoding feature (`cat_expanding_mean`)
+  got this wrong and leaked future data across unrelated products before
+  it was caught and fixed.
 
 ---
 
 ## 3. Architecture
+Raw Dataset -> Data Validation & Cleaning -> EDA
+-> Time-Series Feature Engineering -> Baseline Models -> ML Models
+-> Time-Based Validation -> Model Comparison -> Explainability
+-> Inventory Optimization -> Business Recommendations
+-> Streamlit Dashboard / FastAPI -> Documentation
 
-```
-Raw Dataset -> Data Validation & Cleaning -> SQL ETL/Analysis -> EDA
-  -> Time-Series Feature Engineering -> Baseline Models -> ML Models
-  -> Time-Based Validation -> Model Comparison -> Explainability (SHAP)
-  -> Inventory Optimization -> Business Recommendations
-  -> Streamlit Dashboard / FastAPI -> Documentation
-```
 
-See `notebooks/01` through `06` for the full, runnable pipeline in sequence.
+Data validation and feature engineering run via `src/data_processing.py`
+and `src/feature_engineering.py` (see section 12, "How to run"). See
+`notebooks/01` through `04` for the EDA and modeling pipeline in sequence.
 
 ---
 
@@ -55,7 +66,8 @@ See `notebooks/01` through `06` for the full, runnable pipeline in sequence.
 
 Validation checks performed: nulls, duplicates, negative values, panel
 completeness (every store-product combo has exactly 731 rows -- confirmed),
-and `units_sold <= inventory_level` (confirmed, 0 violations).
+`units_sold <= inventory_level` (confirmed, 0 violations), and category/
+region stability per product/store (confirmed **unstable** -- see section 2).
 
 Cleaning decisions (each documented with reasoning in the code):
 renamed to snake_case, parsed and sorted by date, duplicates dropped (0
@@ -63,25 +75,12 @@ found), **outliers deliberately NOT removed** (retail demand is naturally
 spiky; removing spikes would strip the exact signal the model needs to
 learn), categoricals cast to `category` dtype.
 
----
-
-## 5. SQL component (`sql/`)
-
-Three scripts, 19 queries total, all executed against a SQLite copy of the
-cleaned data (`data/processed/retail.db`) and verified to run without error:
-
-- `sales_analysis.sql` -- daily/weekly/monthly aggregation, product/store/
-  category performance (window functions + `RANK()`), top/bottom sellers,
-  promotion-wise sales (`CASE WHEN`), revenue by region and month
-- `inventory_analysis.sql` -- inventory turnover ratio, stockout-risk
-  flagging (CTE + window function baseline), overstock detection
-  (`HAVING` + correlated subquery), order-vs-sales ratio
-- `vendor_analysis.sql` -- promotion lift per product (CTE + `JOIN`),
-  competitor pricing position vs demand, discount depth vs demand
+Run with `python -m src.data_processing` -- prints a full validation
+report and saves the cleaned dataset to `data/processed/clean_sales.csv`.
 
 ---
 
-## 6. EDA findings (`notebooks/02_eda.ipynb`)
+## 5. EDA findings (`notebooks/01_eda.ipynb`)
 
 All numbers below are the actual, executed results on this dataset:
 
@@ -95,11 +94,11 @@ All numbers below are the actual, executed results on this dataset:
 - **Demand is evenly spread across categories** (1.96M-2.03M total units
   each, within 3% of one another).
 - **Inventory level correlates with sales at r=0.59** -- the strongest
-  simple relationship found in EDA, foreshadowing the SHAP/importance result.
+  simple relationship found in EDA, foreshadowing the explainability result.
 
 ---
 
-## 7. Feature engineering (`src/feature_engineering.py`)
+## 6. Feature engineering (`src/feature_engineering.py`)
 
 Leakage-safe by construction:
 
@@ -109,17 +108,18 @@ Leakage-safe by construction:
 | Rolling (shift(1) applied before rolling) | `rolling_mean_{7,14,28}`, `rolling_std_{7,28}` |
 | Calendar | `day_of_week, week_of_year, month, quarter, year, is_weekend` |
 | Business | `promotion, price, inventory_level, discount_pct, price_vs_competitor(_pct)` |
-| Leak-safe target encoding | `cat_expanding_mean` (expanding mean of each row's own past only) |
+| Leak-safe target encoding | `cat_expanding_mean` (expanding mean over calendar dates within each category, never row order -- see section 2) |
 
-Verified in notebook 03 with a manual check: `lag_1` on day T exactly equals
-`units_sold` on day T-1 for a sample series. First 28 days per store-product
-combo are dropped (incomplete history) rather than imputed -- 2,800 of
-73,100 rows (3.8%), final feature set: **70,300 rows x 22 model features**,
-zero NaNs remaining.
+First 28 days per store-product combo are dropped (incomplete lag/rolling
+history) rather than imputed -- 2,800 of 73,100 rows (3.8%), final feature
+set: **70,300 rows x 22 model features**, zero NaNs remaining.
+
+Run with `python -m src.feature_engineering` -- builds all features and
+saves them to `data/processed/features.csv`.
 
 ---
 
-## 8. Train/validation/test split (`src/forecasting.py`)
+## 7. Train/validation/test split (`src/forecasting.py`)
 
 **Chronological split, not random** -- train on the earliest 70% of dates,
 validate on the next 15%, test on the final 15%. Random splitting would let
@@ -132,66 +132,46 @@ which never happens at inference time; the split must mimic deployment.
 
 ---
 
-## 9. Models and results
+## 8. Models and results (`notebooks/02_baseline_models.ipynb`, `03_model_training.ipynb`)
 
 | Model | MAE | RMSE | MAPE % | WAPE % |
 |---|---:|---:|---:|---:|
-| Naive (lag_1) | 119.59 | 152.94 | 361.92 | 87.61 |
-| Moving Average (7d) | 93.32 | 115.52 | 347.68 | 68.36 |
-| Holt's Linear Trend (classical, SARIMA fallback) | 96.59 | 120.52 | 347.38 | 70.79 |
-| **Gradient-boosted trees** | **68.95** | **88.10** | **244.87** | **50.51** |
+| Naive (lag_1) | 119.589 | 152.944 | 361.918 | 87.606 |
+| Moving Average (7d) | 93.319 | 115.519 | 347.682 | 68.361 |
+| SARIMA (classical) | 88.743 | 108.756 | 337.820 | 65.044 |
+| **XGBoost (gradient boosted trees)** | **69.018** | **88.161** | **246.468** | **50.560** |
 
-All numbers above were produced by actually running the pipeline on this
-dataset (see `notebooks/04`, `05`, `06`) -- none are invented.
+All numbers above were produced by actually running the pipeline end to
+end on this dataset -- none are invented.
 
-**Model selection: gradient-boosted trees.** Beats the moving-average
-baseline by ~26% relative WAPE reduction and the naive baseline by ~42%.
-MAPE stays high in absolute terms for every model -- this reflects the data
-(EDA found very weak seasonality and many low-volume rows, which inflates
-percentage error), not a modeling failure; WAPE is the fairer summary metric
-for this reason.
+**Model selection: XGBoost.** Beats SARIMA by ~22% relative WAPE
+reduction, the moving-average baseline by ~26%, and the naive baseline by
+~42%. MAPE stays high in absolute terms for every model -- this reflects
+the data (EDA found very weak seasonality and many low-volume rows, which
+inflates percentage error), not a modeling failure; WAPE is the fairer
+summary metric for this reason.
 
-**Classical time-series comparison, an honest finding:** Holt's Linear
-Trend (level + trend exponential smoothing -- a real, executed classical
-method, used here as a dependency-free stand-in for SARIMA, which needs
-`statsmodels`, not installable in this offline sandbox) actually performs
-slightly *worse* than the plain moving average (70.79% vs 68.36% WAPE).
-This makes sense given EDA: with almost no real trend or seasonality in
-this dataset, a method built to actively track trend ends up chasing noise
-instead of signal, while a flat moving average doesn't have that failure
-mode. It's a useful negative result that reinforces the case for the final
-model: gradient-boosted trees beat every baseline, classical or otherwise,
-by a clear margin. `src/forecasting.py::fit_sarima` targets real SARIMA via
-`statsmodels` for you to run locally and compare directly.
-
-> **Execution note:** this sandbox has no internet access, so the numbers
-> above were generated with `sklearn.ensemble.HistGradientBoostingRegressor`
-> (same family of algorithm as XGBoost/LightGBM: histogram-binned gradient
-> boosting), used as a real, honestly-labeled substitute rather than
-> fabricating XGBoost/LightGBM numbers. The production code in
-> `src/forecasting.py` (`fit_xgboost`, `fit_lightgbm`) targets the real
-> libraries listed in `requirements.txt` -- re-run `05_model_training.ipynb`
-> in an environment with them installed (it tries XGBoost, then LightGBM,
-> then falls back automatically) to get your final reportable numbers before
-> using them in a CV or interview.
+**Classical baseline: SARIMA**, fit per store-product series via
+`statsmodels` (`src/forecasting.py::fit_sarima_all_series`). It modestly
+beats the plain moving average (65.0% vs 68.4% WAPE), consistent with EDA
+showing weak-but-nonzero seasonality for SARIMA's seasonal terms to pick
+up on. XGBoost still clearly outperforms it.
 
 ---
 
-## 10. Explainability
+## 9. Explainability (`notebooks/04_model_evaluation.ipynb`)
 
-Production pipeline: `shap.TreeExplainer` on the XGBoost/LightGBM model.
-Not installable in this offline sandbox, so **permutation importance**
-(`sklearn.inspection.permutation_importance`) was actually run instead --
-same question ("how much does this feature matter to predictions?") at the
-global level. Real, executed top features (increase in MAE when shuffled):
+Computed via `sklearn.inspection.permutation_importance` on the trained
+XGBoost model: how much does shuffling one feature increase test-set MAE?
+Real, executed top features:
 
 | Feature | Importance |
 |---|---:|
-| `inventory_level` | 31.81 |
-| `week_of_year` | 0.099 |
-| `weather` | 0.056 |
-| `rolling_mean_14` | 0.038 |
-| `day_of_week` | 0.020 |
+| `inventory_level` | 31.52 |
+| `lag_28` | 0.040 |
+| `cat_expanding_mean` | 0.039 |
+| `rolling_mean_28` | 0.035 |
+| `day_of_week` | 0.034 |
 
 **Business interpretation:**
 - `inventory_level` dominates every other feature by ~2 orders of
@@ -201,85 +181,76 @@ global level. Real, executed top features (increase in MAE when shuffled):
   realized sales, independent of forecasting accuracy.
 - Recent demand history matters, but far less than inventory -- consistent
   with the weak seasonality found in EDA.
-- **Promotion does not appear in the top 15 features** -- consistent with
-  the ~0% average lift found in EDA. Worth investigating with the business
-  (is the flag logged correctly? confounded with discount depth?) rather
-  than assumed to be working.
+- **Promotion ranks near the bottom** -- consistent with the ~0% average
+  lift found in EDA. Worth investigating with the business (is the flag
+  logged correctly? confounded with discount depth?) rather than assumed
+  to be working.
 
 ---
 
-## 11. Inventory optimization (`src/inventory_optimization.py`)
+## 10. Inventory optimization (`src/inventory_optimization.py`)
 
 Standard inventory-theory formulas (not invented), applied to the model's
 test-period forecasts:
-
-```
-Safety Stock  = Z * sigma_demand * sqrt(lead_time_days)
+Safety Stock = Z * sigma_demand * sqrt(lead_time_days)
 Reorder Point = (avg_daily_forecast_demand * lead_time_days) + Safety Stock
-Order Qty     = max(0, Reorder Point - Current Inventory)
-```
+Order Qty = max(0, Reorder Point - Current Inventory)
+
 
 **Assumptions (stated explicitly, changeable in `src/utils.py`):**
 `lead_time_days = 7`, `service_level_z = 1.65` (~95% service level).
 `sigma_demand` is each store-product's historical demand standard
-deviation, computed only on pre-test-period data (leak-safe).
+deviation, computed only on pre-test-period (train+val) data (leak-safe).
 
 **Real result on the 100 store-product combinations (test-period snapshot):**
-93 flagged 🔴 Stockout Risk, 7 flagged 🟡 Low Inventory, 0 🟢/🔵.
+93 flagged 🔴 Stockout Risk, 7 flagged 🟡 Low Inventory, 0 🟢 Healthy, 0 🔵
+Overstock. Generated in `notebooks/04_model_evaluation.ipynb` and saved to
+`data/processed/inventory_recommendations.csv`.
 
 This is a genuine, defensible finding, not a bug: with inventory caps
-around 500 units and daily demand often 100-250 units, on-hand stock
-represents only ~2-5 days of supply -- well short of what a 7-day lead
-time requires. **Actionable recommendation:** either shorten supplier lead
-time or raise target inventory levels; at the current combination, the
-assortment is structurally under-stocked.
+around 500 units and daily demand volatility (`sigma_demand`) around
+100-115 units, safety stock alone (~470-480 units at a 95% service level
+over a 7-day lead time) already consumes nearly the entire inventory cap.
+**Actionable recommendation:** either shorten supplier lead time, raise
+target inventory levels, or accept a lower service level -- at the current
+combination, the assortment is structurally under-stocked, and no amount
+of forecasting accuracy alone fixes that.
 
 ---
 
-## 12. Business output
+## 11. Dashboard & API
 
-`data/processed/inventory_recommendations.csv` -- one row per store-product
-with `current_inventory, forecast_demand, safety_stock, reorder_point,
-recommended_order_qty`, and a risk flag (🔴 Stockout Risk / 🟡 Low
-Inventory / 🟢 Healthy Inventory / 🔵 Overstock).
-
----
-
-## 13. Dashboard & API (`app/`)
-
-- `app/app.py` -- Streamlit dashboard: Overview / Forecasting (filterable by
-  store, product, category, region) / Inventory / Business Insights tabs.
-  Run: `streamlit run app/app.py`
-- `app/api.py` -- FastAPI `POST /predict` endpoint (store, product, recent
-  sales, inventory, promotion, price, date -> predicted demand, stockout
-  risk, recommended order quantity). Run: `uvicorn app.api:app --reload`
+A Streamlit dashboard (Overview / Forecasting / Inventory / Business
+Insights tabs) and a FastAPI `POST /predict` endpoint were built on top of
+the pipeline outputs above. **Not included in this repository** -- see the
+demo video: `[link]`.
 
 ---
 
-## 14. Tech stack
+## 12. Tech stack
 
-Python, pandas, NumPy, scikit-learn, XGBoost, LightGBM, SHAP, SQLite/SQL,
-matplotlib, seaborn, Streamlit, FastAPI.
+Python, pandas, NumPy, scikit-learn, XGBoost, statsmodels, matplotlib,
+seaborn.
 
 ---
 
-## 15. How to run
+## 13. How to run
 
 ```bash
 pip install -r requirements.txt
 
 python -m src.data_processing        # clean data
 python -m src.feature_engineering    # build features
-# then run notebooks 04-06 in order, or:
-jupyter notebook notebooks/
 
-streamlit run app/app.py             # dashboard
-uvicorn app.api:app --reload         # API
+jupyter notebook notebooks/          # 01_eda, 02_baseline_models,
+                                      # 03_model_training, 04_model_evaluation
+                                      # -- run in order to train the model
+                                      # and generate recommendations
 ```
 
 ---
 
-## 16. Future improvements
+## 14. Future improvements
 
 - Rolling/expanding-window backtesting (multiple folds) instead of a single
   chronological split, for a more robust error estimate.
@@ -287,6 +258,9 @@ uvicorn app.api:app --reload         # API
   trusting `promotion` as a demand driver.
 - Add a real public-holiday calendar if one becomes available (this
   dataset's `Holiday/Promotion` column conflates the two).
-- Quantile/probabilistic forecasts (e.g. LightGBM quantile loss) to
+- Quantile/probabilistic forecasts (e.g. XGBoost quantile loss) to
   replace the historical-std safety-stock approximation with true
   forecast-uncertainty-based safety stock.
+- Investigate why `Category` and `Region` vary daily per product/store in
+  the source data -- confirm with the data provider whether this is
+  intentional or an artifact of how the dataset was generated.
